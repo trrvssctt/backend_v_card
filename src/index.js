@@ -31,17 +31,19 @@ const PORT = process.env.PORT || 3000;
 const cors = require('cors');
 // Configure CORS early so preflight requests are handled before body parsing
 // Allow multiple origins via CORS_ORIGIN env var (comma-separated). Default includes localhost and the deployed frontend domain.
-// Include frontend dev origin (localhost:8080) and backend local (localhost:3000) for convenience
-const rawOrigins = process.env.CORS_ORIGIN || 'http://localhost:8080,http://localhost:3000,https://frontend-nfc.vercel.app';
+// Include frontend dev origin (localhost:8080), backend local (localhost:3000) and production frontend domain `https://portefolia.tech`.
+const rawOrigins = process.env.CORS_ORIGIN || 'http://localhost:8080,http://localhost:3000,https://frontend-nfc.vercel.app,https://portefolia.tech';
 const allowedOrigins = rawOrigins.split(',').map(s => s.trim()).filter(Boolean);
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps or curl)
     if (!origin) return callback(null, true);
+    // If env allows wildcard '*', accept any origin
+    if (allowedOrigins.indexOf('*') !== -1) return callback(null, true);
     if (allowedOrigins.indexOf(origin) !== -1) {
       return callback(null, true);
     } else {
-      return callback(new Error('Not allowed by CORS'));
+      return callback(new Error('Not allowed by CORS: ' + origin));
     }
   },
   credentials: true,
