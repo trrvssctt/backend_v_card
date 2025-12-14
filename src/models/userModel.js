@@ -55,7 +55,7 @@ async function findByEmail(email) {
 }
 
 async function findById(id) {
-  const [rows] = await pool.query('SELECT id, nom, prenom, email, photo_profil, biographie, role, verified, date_inscription, dernier_login FROM utilisateurs WHERE id = ? LIMIT 1', [id]);
+  const [rows] = await pool.query('SELECT id, nom, prenom, email, photo_profil, biographie, role, verified, is_active, date_inscription, dernier_login FROM utilisateurs WHERE id = ? LIMIT 1', [id]);
   return rows[0];
 }
 

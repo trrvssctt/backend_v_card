@@ -16,23 +16,63 @@ async function create(req, res) {
       conn.release();
       return res.status(401).json({ error: 'Unauthorized' });
     }
-
-    // Check user plan to enforce restrictions (free plan constraints)
     const userPlans = await planModel.listUserPlans(userId);
-    const latestPlan = (userPlans && userPlans.length > 0) ? userPlans[0] : null;
-    const isFreePlan = latestPlan && (Number(latestPlan.price_cents || 0) === 0 || (latestPlan.slug && latestPlan.slug.toLowerCase() === 'gratuit'));
+    const latestPlan = userPlans && userPlans.length ? userPlans[0] : null;
+    const planSlug = latestPlan && latestPlan.slug ? String(latestPlan.slug).trim().toLowerCase() : 'gratuit';
+    const isFreePlan = planSlug === 'gratuit' || planSlug === 'free' || (latestPlan && Number(latestPlan.price_cents || 0) === 0);
+    const isStarterPlan = ['starter', 'standard'].includes(planSlug);
+    const isProPlan = ['professionnel', 'pro', 'professional'].includes(planSlug);
+    const isPremiumPlan = ['premium', 'premium_pro', 'premium-plus'].includes(planSlug);
+    console.log(`User ${userId} creating portfolio with plan slug='${planSlug}' (isProPlan=${isProPlan})`);
+    const isBusinessPlan = ['business'].includes(planSlug);
 
-    // If free plan, ensure user doesn't already have a portfolio
-    if (isFreePlan) {
+    // If free plan, ensure user doesn't already have a portfolio (limit 1)
+    // Business plan has no limits
+    if (isFreePlan && !isBusinessPlan) {
       const existing = await portfolioModel.findByUser(userId);
       if (existing && existing.length > 0) {
         await conn.rollback();
         conn.release();
-        return res.status(400).json({ error: 'Plan gratuit: vous ne pouvez créer qu\'un seul portfolio' });
+        return res.status(400).json({ error: "Plan gratuit: vous ne pouvez créer qu'un seul portfolio" });
+      }
+    }
+
+    // If starter plan, enforce limit of 5 portfolios
+    if (isStarterPlan && !isBusinessPlan) {
+      const existing = await portfolioModel.findByUser(userId);
+      const count = existing ? existing.length : 0;
+      if (count >= 5) {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ error: 'Plan Starter: limite atteinte (5 portfolios maximum)' });
+      }
+    }
+
+    // If professional plan, enforce limit of 20 portfolios
+    if (isProPlan && !isBusinessPlan) {
+      const existing = await portfolioModel.findByUser(userId);
+      const count = existing ? existing.length : 0;
+      if (count >= 20) {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ error: 'Plan Professionnel: limite atteinte (20 portfolios maximum)' });
       }
     }
 
     const incoming = { ...req.body };
+    // Enforce social links limit: free=1, starter=3, others unlimited
+    const socialKeys = ['website', 'linkedin_url', 'github_url', 'twitter_url', 'facebook_url', 'instagram_url'];
+    const providedSocials = socialKeys.reduce((acc, k) => acc + (incoming[k] ? 1 : 0), 0);
+    // Free=1, Starter=3, Premium+Business=5, Pro/default=Infinity
+    let socialLimit = Infinity;
+    if (isFreePlan) socialLimit = 1;
+    else if (isStarterPlan) socialLimit = 3;
+    else if (isPremiumPlan || isBusinessPlan) socialLimit = 5;
+    if (providedSocials > socialLimit) {
+      await conn.rollback();
+      conn.release();
+      return res.status(400).json({ error: `Limite formulé ${isFreePlan ? 'gratuite' : 'Starter'} : vous ne pouvez ajouter que ${socialLimit} lien(s) de réseaux sociaux.` });
+    }
     // Map frontend fields to French DB columns (SEULEMENT les champs du schéma)
     const mapped = {
       utilisateur_id: userId,
@@ -55,6 +95,8 @@ async function create(req, res) {
       linkedin_url: incoming.linkedin_url || null,
       github_url: incoming.github_url || null,
       twitter_url: incoming.twitter_url || null,
+      facebook_url: incoming.facebook_url || null,
+      instagram_url: incoming.instagram_url || null,
     };
     const keys = Object.keys(mapped).filter(k => mapped[k] !== undefined && mapped[k] !== null).join(', ');
     const placeholders = Object.keys(mapped).filter(k => mapped[k] !== undefined && mapped[k] !== null).map(() => '?').join(', ');
@@ -65,6 +107,13 @@ async function create(req, res) {
     // Persist related records if provided using the same connection (map to French columns)
     // For free plans we disallow adding related items on creation
     if (!isFreePlan && Array.isArray(req.body.projects) && req.body.projects.length > 0) {
+      // Limit projects: Starter=3, Pro=10, others unlimited
+      const projectLimit = isStarterPlan ? 3 : (isProPlan ? 10 : Infinity);
+      if (req.body.projects.length > projectLimit) {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ error: `Plan ${isStarterPlan ? 'Starter' : (isProPlan ? 'Professionnel' : 'Avancé')} : maximum ${projectLimit} projets par portfolio.` });
+      }
       for (const p of req.body.projects) {
         const projMapped = {
           portfolio_id: portfolioId,
@@ -83,6 +132,13 @@ async function create(req, res) {
       }
     }
     if (!isFreePlan && Array.isArray(req.body.competences) && req.body.competences.length > 0) {
+      // Limit competences: Starter=3, Pro=10, others unlimited
+      const competenceLimit = isStarterPlan ? 3 : (isProPlan ? 10 : Infinity);
+      if (req.body.competences.length > competenceLimit) {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ error: `Plan ${isStarterPlan ? 'Starter' : (isProPlan ? 'Professionnel' : 'Avancé')} : maximum ${competenceLimit} compétences par portfolio.` });
+      }
       for (const c of req.body.competences) {
         const compMapped = {
           portfolio_id: portfolioId,
@@ -97,6 +153,16 @@ async function create(req, res) {
       }
     }
     if (!isFreePlan && Array.isArray(req.body.experiences) && req.body.experiences.length > 0) {
+      // Limit experiences: Starter=0 (not allowed), Pro=5, others unlimited
+      const experienceLimit = isStarterPlan ? 0 : (isProPlan ? 5 : Infinity);
+      if (req.body.experiences.length > experienceLimit) {
+        await conn.rollback();
+        conn.release();
+        if (experienceLimit === 0) {
+          return res.status(400).json({ error: 'Plan Starter : ajout d\'expériences non autorisé.' });
+        }
+        return res.status(400).json({ error: `Plan ${isProPlan ? 'Professionnel' : 'Avancé'} : maximum ${experienceLimit} expériences par portfolio.` });
+      }
       for (const e of req.body.experiences) {
         const expMapped = {
           portfolio_id: portfolioId,
@@ -114,11 +180,13 @@ async function create(req, res) {
     }
 
       const socialPlatforms = [
-      { key: 'website', plateforme: 'website' },
-      { key: 'linkedin_url', plateforme: 'linkedin' },
-      { key: 'github_url', plateforme: 'github' },
-      { key: 'twitter_url', plateforme: 'twitter' },
-    ];
+        { key: 'website', plateforme: 'website' },
+        { key: 'linkedin_url', plateforme: 'linkedin' },
+        { key: 'github_url', plateforme: 'github' },
+        { key: 'twitter_url', plateforme: 'twitter' },
+        { key: 'facebook_url', plateforme: 'facebook' },
+        { key: 'instagram_url', plateforme: 'instagram' },
+      ];
     for (const plat of socialPlatforms) {
       const url = incoming[plat.key];
       if (url) {
@@ -163,7 +231,7 @@ async function update(req, res) {
       if (incoming.bio !== undefined || incoming.description !== undefined) mappedUpdate.description = incoming.bio || incoming.description;
       if (incoming.theme_color !== undefined || incoming.theme !== undefined) mappedUpdate.theme = incoming.theme_color || incoming.theme;
       if (incoming.slug !== undefined || incoming.url_slug !== undefined) mappedUpdate.url_slug = incoming.slug || incoming.url_slug;
-      if (incoming.is_public !== undefined || incoming.est_public !== undefined) mappedUpdate.est_public = incoming.is_public || incoming.est_public;
+      if (incoming.is_public !== undefined || incoming.est_public !== undefined) mappedUpdate.est_public = (incoming.is_public !== undefined) ? incoming.is_public : incoming.est_public;
   // optional presentation fields
   if (incoming.banner_type !== undefined) mappedUpdate.banner_type = incoming.banner_type;
   if (incoming.banner_image_url !== undefined || incoming.banner !== undefined) mappedUpdate.banner_image_url = incoming.banner_image_url || incoming.banner;
@@ -237,23 +305,78 @@ async function update(req, res) {
         }
       }
 
+      // Before replacing social links, enforce free-plan limit (only one social link allowed)
+      const userPlans = await planModel.listUserPlans(userId);
+      const latestPlan = userPlans && userPlans.length ? userPlans[0] : null;
+      const planSlug = latestPlan && latestPlan.slug ? String(latestPlan.slug).trim().toLowerCase() : 'gratuit';
+      console.log(`User ${userId} updating portfolio with plan slug='${planSlug}'`);
+      const isFree = planSlug === 'gratuit' || planSlug === 'free' || (latestPlan && Number(latestPlan.price_cents || 0) === 0);
+      const isStarter = ['starter', 'standard'].includes(planSlug);
+      const isPro = ['professionnel', 'pro', 'professional'].includes(planSlug);
+      const isPremium = ['premium', 'premium_pro', 'premium-plus'].includes(planSlug);
+      const isBusiness = ['business'].includes(planSlug);
+
+      const socialPlatforms = [
+        { key: 'website', plateforme: 'website' },
+        { key: 'linkedin_url', plateforme: 'linkedin' },
+        { key: 'github_url', plateforme: 'github' },
+        { key: 'twitter_url', plateforme: 'twitter' },
+        { key: 'facebook_url', plateforme: 'facebook' },
+        { key: 'instagram_url', plateforme: 'instagram' },
+      ];
+
+      const provided = socialPlatforms.reduce((acc, plat) => acc + ((incoming && incoming[plat.key]) ? 1 : 0), 0);
+      // Free=1, Starter=3, Premium+Business=5, Pro/default=Infinity
+      let socialLimitUpdate = Infinity;
+      if (isFree) socialLimitUpdate = 1;
+      else if (isStarter) socialLimitUpdate = 3;
+      else if (isPremium || isBusiness) socialLimitUpdate = 5;
+      if (provided > socialLimitUpdate) {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ error: `Limite formulé ${isFree ? 'gratuite' : 'Starter'} : vous ne pouvez ajouter que ${socialLimitUpdate} lien(s) de réseaux sociaux.` });
+      }
+
+      // Enforce project/competence/experience limits for updates as well
+      if (Array.isArray(req.body.projects)) {
+        const projectLimitUpdate = isStarter ? 3 : (isPro ? 10 : Infinity);
+        if (req.body.projects.length > projectLimitUpdate) {
+          await conn.rollback();
+          conn.release();
+          return res.status(400).json({ error: `Plan ${isStarter ? 'Starter' : (isPro ? 'Professionnel' : 'Avancé')} : maximum ${projectLimitUpdate} projets par portfolio.` });
+        }
+      }
+      if (Array.isArray(req.body.competences)) {
+        const competenceLimitUpdate = isStarter ? 3 : (isPro ? 10 : Infinity);
+        if (req.body.competences.length > competenceLimitUpdate) {
+          await conn.rollback();
+          conn.release();
+          return res.status(400).json({ error: `Plan ${isStarter ? 'Starter' : (isPro ? 'Professionnel' : 'Avancé')} : maximum ${competenceLimitUpdate} compétences par portfolio.` });
+        }
+      }
+      if (Array.isArray(req.body.experiences)) {
+        const experienceLimitUpdate = isStarter ? 0 : (isPro ? 5 : Infinity);
+        if (req.body.experiences.length > experienceLimitUpdate) {
+          await conn.rollback();
+          conn.release();
+          if (experienceLimitUpdate === 0) {
+            return res.status(400).json({ error: 'Plan Starter : ajout d\'expériences non autorisé.' });
+          }
+          return res.status(400).json({ error: `Plan ${isPro ? 'Professionnel' : 'Avancé'} : maximum ${experienceLimitUpdate} expériences par portfolio.` });
+        }
+      }
+
       await conn.query('DELETE FROM liens_sociaux WHERE portfolio_id = ?', [id]);
-  const socialPlatforms = [
-    { key: 'website', plateforme: 'website' },
-    { key: 'linkedin_url', plateforme: 'linkedin' },
-    { key: 'github_url', plateforme: 'github' },
-    { key: 'twitter_url', plateforme: 'twitter' },
-  ];
-  for (const plat of socialPlatforms) {
-    const url = incoming[plat.key];
-    if (url) {
-      await conn.query(
-        'INSERT INTO liens_sociaux (portfolio_id, plateforme, url) VALUES (?, ?, ?)',
-        [id, plat.plateforme, url]
-      );
-      console.log(`Updated social link: ${plat.plateforme} = ${url}`);  // Log debug
-    }
-  }
+      for (const plat of socialPlatforms) {
+        const url = incoming[plat.key];
+        if (url) {
+          await conn.query(
+            'INSERT INTO liens_sociaux (portfolio_id, plateforme, url) VALUES (?, ?, ?)',
+            [id, plat.plateforme, url]
+          );
+          console.log(`Updated social link: ${plat.plateforme} = ${url}`);  // Log debug
+        }
+      }
 
       await conn.commit();
       conn.release();

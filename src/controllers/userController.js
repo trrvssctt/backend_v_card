@@ -26,6 +26,11 @@ async function login(req, res) {
   const ok = await bcrypt.compare(password, user.password);
   if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
 
+  // Block login for inactive users (paid accounts awaiting validation)
+  if (typeof user.is_active !== 'undefined' && user.is_active === 0) {
+    return res.status(403).json({ error: 'Account inactive. Payment is pending administrative validation.' });
+  }
+
   const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
   return res.json({ token });
 }

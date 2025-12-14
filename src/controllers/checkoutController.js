@@ -68,13 +68,26 @@ async function confirmCheckout(req, res) {
     // update checkout status
     await checkoutModel.updateStatus(checkout.id, 'confirmed');
 
-    // Subscribe user to plan
-    await planModel.subscribeUser({ utilisateur_id: checkout.utilisateur_id, plan_id: checkout.plan_id, status: 'active', payment_reference: reference_transaction || null });
+    // mark paiement as confirmed and update checkout status
+    // Do NOT automatically subscribe the user here: admin must validate payments and activate accounts
+    await paiementModel.updateStatus(checkout.paiement_id, 'confirmed');
+    await checkoutModel.updateStatus(checkout.id, 'confirmed');
+    // update commande status for admin review
+    try { await commandeModel.updateStatus(checkout.commande_id, 'En_traitement'); } catch (e) { /* ignore */ }
 
-    // update commande status
-    await commandeModel.updateStatus(checkout.commande_id, 'En_traitement');
+    // Optionally notify admins via email (if configured)
+    try {
+      const sendEmail = require('../utils/sendEmail');
+      const adminEmail = process.env.ADMIN_EMAIL;
+      if (adminEmail) {
+        const user = await require('../models/userModel').findById(checkout.utilisateur_id);
+        await sendEmail({ to: adminEmail, subject: 'Paiement en attente de validation', html: `<p>Nouvelle demande de paiement pour ${user?.email}</p><p>Checkout: ${checkout.token}</p>` });
+      }
+    } catch (e) {
+      // ignore notification failures
+    }
 
-    return res.json({ ok: true });
+    return res.json({ ok: true, message: 'Paiement reçu et en attente de validation administrative.' });
   } catch (err) {
     console.error('confirmCheckout error:', err);
     return res.status(500).json({ error: 'Server error' });

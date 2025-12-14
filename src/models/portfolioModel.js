@@ -46,6 +46,9 @@ async function init() {
     await pool.query("ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS linkedin_url VARCHAR(255)");
     await pool.query("ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS github_url VARCHAR(255)");
     await pool.query("ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS twitter_url VARCHAR(255)");
+    // template relation fields
+    await pool.query("ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS selected_template_id INT NULL");
+    await pool.query("ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS template_settings JSON NULL");
   } catch (err) {
     // Ignore if ALTER NOT SUPPORTED on older MySQL; table created above will contain columns for new DBs
     console.warn('portfolioModel.init: ALTER TABLE optional columns may not be supported on this MySQL version:', err.message);
@@ -88,7 +91,7 @@ async function updatePortfolio(id, data) {
   if (data.title !== undefined || data.titre !== undefined) payload.titre = data.title || data.titre;
   if (data.bio !== undefined || data.description !== undefined) payload.description = data.bio || data.description;
   if (data.slug !== undefined || data.url_slug !== undefined) payload.url_slug = data.slug || data.url_slug;
-  if (data.is_public !== undefined || data.est_public !== undefined) payload.est_public = data.is_public || data.est_public;
+  if (data.is_public !== undefined || data.est_public !== undefined) payload.est_public = (data.is_public !== undefined) ? data.is_public : data.est_public;
   if (data.theme_color !== undefined || data.theme !== undefined) payload.theme = data.theme_color || data.theme;
   // social/contact fields
   if (data.location !== undefined) payload.location = data.location;

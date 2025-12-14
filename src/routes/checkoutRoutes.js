@@ -9,7 +9,7 @@ router.post('/', authMiddleware, checkoutController.createCheckout);
 // get checkout details by token (public)
 router.get('/:token', checkoutController.getCheckout);
 
-// confirm checkout (authenticated or webhook in real world)
-router.post('/:token/confirm', authMiddleware, checkoutController.confirmCheckout);
+// confirm checkout (allow unauthenticated confirmation using checkout token)
+router.post('/:token/confirm', checkoutController.confirmCheckout);
 
 module.exports = router;

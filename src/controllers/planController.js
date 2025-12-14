@@ -73,7 +73,41 @@ async function getUserPlans(req, res) {
     const utilisateur_id = req.userId;
     if (!utilisateur_id) return res.status(401).json({ error: 'Unauthorized' });
     const rows = await planModel.listUserPlans(utilisateur_id);
-    return res.json({ plans: rows });
+
+    // Compute next payment date for monthly subscriptions (if applicable)
+    const enhanced = (rows || []).map((r) => {
+      const item = { ...r };
+      try {
+        const billing = (r.billing_interval || '').toLowerCase();
+        const start = r.start_date ? new Date(r.start_date) : null;
+        const status = r.status || '';
+        if (billing === 'monthly' && start && status === 'active') {
+          // Add months until next payment is in the future
+          const addMonths = (dt, n) => {
+            const d = new Date(dt);
+            const month = d.getMonth();
+            d.setMonth(month + n);
+            return d;
+          };
+          let next = addMonths(start, 1);
+          // Safety: avoid infinite loop, cap to 120 months
+          let iter = 0;
+          const now = new Date();
+          while (next <= now && iter < 120) {
+            iter++;
+            next = addMonths(start, iter + 1);
+          }
+          item.next_payment_date = next.toISOString();
+        } else {
+          item.next_payment_date = null;
+        }
+      } catch (e) {
+        item.next_payment_date = null;
+      }
+      return item;
+    });
+
+    return res.json({ plans: enhanced });
   } catch (err) {
     console.error('planController.getUserPlans', err);
     return res.status(500).json({ error: 'Failed to fetch user plans' });

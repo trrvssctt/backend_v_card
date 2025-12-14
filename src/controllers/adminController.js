@@ -26,6 +26,7 @@ async function listUsers(req, res) {
               u.email,
               u.role,
               u.verified,
+              u.is_active,
               u.date_inscription AS created_at,
               (SELECT COUNT(*) FROM portfolios p WHERE p.utilisateur_id = u.id) AS portfolio_count,
               p.id AS plan_id,
@@ -115,8 +116,16 @@ async function approveUpgrade(req, res) {
     // mark checkout as approved
     await checkoutModel.updateStatus(checkout.id, 'approved');
 
+
     // subscribe user to plan
     await planModel.subscribeUser({ utilisateur_id: checkout.utilisateur_id, plan_id: checkout.plan_id, status: 'active', payment_reference: reference || null });
+
+    // mark the user active now that payment is approved
+    try {
+      await userModel.setActive(checkout.utilisateur_id, true);
+    } catch (e) {
+      console.warn('approveUpgrade: could not set user active', e.message || e);
+    }
 
     // update commande status
     await commandeModelLocal.updateStatus(checkout.commande_id, 'En_traitement');
@@ -141,16 +150,17 @@ async function listPendingUsers(req, res) {
   try {
     const [rows] = await pool.query(
       `SELECT u.id,
-              u.nom AS last_name,
-              u.prenom AS first_name,
-              u.email,
-              u.role,
-              u.date_inscription AS created_at,
-              u.verified,
-              p.id AS plan_id,
-              p.name AS plan_name,
-              p.slug AS plan_slug,
-              p.price_cents AS plan_price_cents
+                u.nom AS last_name,
+                u.prenom AS first_name,
+                u.email,
+                u.role,
+                u.date_inscription AS created_at,
+                u.verified,
+                u.is_active,
+                p.id AS plan_id,
+                p.name AS plan_name,
+                p.slug AS plan_slug,
+                p.price_cents AS plan_price_cents
        FROM utilisateurs u
        LEFT JOIN (
          SELECT up.utilisateur_id, up.plan_id FROM user_plans up
@@ -159,7 +169,7 @@ async function listPendingUsers(req, res) {
          )
        ) latest_up ON latest_up.utilisateur_id = u.id
        LEFT JOIN plans p ON p.id = latest_up.plan_id
-       WHERE u.verified = FALSE OR u.verified = 0
+         WHERE (u.verified = FALSE OR u.verified = 0) OR (u.is_active = FALSE OR u.is_active = 0)
        ORDER BY u.date_inscription DESC`
     );
     return res.json({ users: rows });
@@ -390,6 +400,12 @@ async function confirmPaymentAndValidate(req, res) {
 
     // mark user as verified
     await userModel.verifyUser(id);
+    // mark user as active (payment validated)
+    try {
+      await userModel.setActive(id, true);
+    } catch (e) {
+      console.warn('confirmPaymentAndValidate: could not set user active', e.message || e);
+    }
 
     // create invoice record
     const invoice = await invoiceModel.createInvoice({ utilisateur_id: id, plan_id, amount, currency, reference, status: 'paid' });
@@ -418,7 +434,7 @@ async function confirmPaymentAndValidate(req, res) {
 
     // send invoice email to user
     const user = await userModel.findById(id);
-    const loginUrl = `${process.env.APP_URL || 'http://localhost:3000'}/auth`;
+    const loginUrl = `${process.env.APP_URL || 'https://backend-v-card.onrender.com'}/auth`;
     // build rich email body with all references
     const prevPlanHtml = previousPlan ? `
       <li>Plan précédent: ${previousPlan.name || previousPlan.nom || '—'}</li>

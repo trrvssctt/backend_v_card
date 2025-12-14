@@ -20,7 +20,10 @@ const commandeModel = require('./models/commandeModel');
 const carteModel = require('./models/carteModel');
 const carteVisiteModel = require('./models/carte_visite_model');
 const carteVisiteRoutes = require('./routes/carte_visite_routes');
+const templateRoutes = require('./routes/templateRoutes');
+const templateModel = require('./models/templateModel');
 const adminRoutes = require('./routes/adminRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
 const uploadPublicRoutes = require('./routes/uploadPublicRoutes');
 const adminController = require('./controllers/adminController');
 const db = require('./db');
@@ -32,7 +35,8 @@ const cors = require('cors');
 // Configure CORS early so preflight requests are handled before body parsing
 // Allow multiple origins via CORS_ORIGIN env var (comma-separated). Default includes localhost and the deployed frontend domain.
 // Include frontend dev origin (localhost:8080), backend local (localhost:3000) and production frontend domain `https://portefolia.tech`.
-const rawOrigins = process.env.CORS_ORIGIN || 'http://localhost:8080,http://localhost:3000,https://frontend-nfc.vercel.app,https://portefolia.tech';
+// Include common local dev ports (Vite default 5173, webpack/dev server 8080) and backend port 3000
+const rawOrigins = process.env.CORS_ORIGIN || 'http://localhost:5173,http://localhost:8080,http://localhost:3000,https://frontend-nfc.vercel.app,https://portefolia.tech';
 const allowedOrigins = rawOrigins.split(',').map(s => s.trim()).filter(Boolean);
 const corsOptions = {
   origin: function (origin, callback) {
@@ -71,12 +75,16 @@ app.get('/', (req, res) => res.json({ok: true}));
 app.use('/api/commandes', commandeRoutes);
 // NFC card plans (public)
 app.use('/api/nfc-cards', carteVisiteRoutes);
+// Template routes (public + admin)
+app.use('/api/templates', templateRoutes);
 // Serve generated vCard visit files
 app.use('/uploads/visites_carte', express.static(path.join(__dirname, '..', 'public', 'Visites_Carte')));
 const checkoutRoutes = require('./routes/checkoutRoutes');
 app.use('/api/checkout', checkoutRoutes);
 // admin routes
 app.use('/api/admin', adminRoutes);
+// Analytics endpoints (per-portfolio, owners only)
+app.use('/api/analytics', analyticsRoutes);
 // public upload routes (authenticated users)
 app.use('/api/uploads', uploadPublicRoutes);
 // plans
@@ -98,6 +106,7 @@ app.post('/webhooks/payment', (req, res) => adminController.paymentWebhook(req, 
     await experienceModel.init();
     // init plans
     await planModel.init();
+    await templateModel.init();
     const invoiceModel = require('./models/invoiceModel');
     await invoiceModel.init();
     await commandeModel.init();

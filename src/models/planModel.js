@@ -116,7 +116,10 @@ async function subscribeUser({ utilisateur_id, plan_id = null, start_date = null
 }
 
 async function listUserPlans(utilisateur_id) {
-  const [rows] = await pool.query('SELECT up.*, p.name, p.slug, p.price_cents FROM user_plans up LEFT JOIN plans p ON p.id = up.plan_id WHERE up.utilisateur_id = ? ORDER BY up.created_at DESC', [utilisateur_id]);
+  const [rows] = await pool.query(
+    'SELECT up.*, p.name, p.slug, p.price_cents, p.billing_interval, p.currency FROM user_plans up LEFT JOIN plans p ON p.id = up.plan_id WHERE up.utilisateur_id = ? ORDER BY up.created_at DESC',
+    [utilisateur_id]
+  );
   return rows;
 }
 
