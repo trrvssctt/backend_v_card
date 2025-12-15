@@ -36,7 +36,7 @@ const cors = require('cors');
 // Allow multiple origins via CORS_ORIGIN env var (comma-separated). Default includes localhost and the deployed frontend domain.
 // Include frontend dev origin (localhost:8080), backend local (localhost:3000) and production frontend domain `https://portefolia.tech`.
 // Include common local dev ports (Vite default 5173, webpack/dev server 8080) and backend port 3000
-const rawOrigins = process.env.CORS_ORIGIN || 'http://localhost:5173,http://localhost:8080,http://localhost:3000,https://frontend-nfc.vercel.app,https://portefolia.tech';
+const rawOrigins = process.env.CORS_ORIGIN || 'https://portefolia.tech,http://localhost:5173,http://localhost:8080,http://localhost:3000,https://frontend-nfc.vercel.app';
 const allowedOrigins = rawOrigins.split(',').map(s => s.trim()).filter(Boolean);
 const corsOptions = {
   origin: function (origin, callback) {
