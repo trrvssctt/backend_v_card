@@ -1,0 +1,37 @@
+-- Migration 006: create content tables (articles, pages, content_history)
+
+CREATE TABLE IF NOT EXISTS articles (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  slug VARCHAR(255) NOT NULL UNIQUE,
+  excerpt TEXT DEFAULT NULL,
+  content LONGTEXT,
+  meta_title VARCHAR(255) DEFAULT NULL,
+  meta_description VARCHAR(512) DEFAULT NULL,
+  status ENUM('draft','published') DEFAULT 'draft',
+  author_id INT DEFAULT NULL,
+  published_at TIMESTAMP NULL DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NULL DEFAULT NULL,
+  deleted_at TIMESTAMP NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS pages (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  slug VARCHAR(255) NOT NULL UNIQUE,
+  title VARCHAR(255) DEFAULT NULL,
+  content LONGTEXT,
+  meta_title VARCHAR(255) DEFAULT NULL,
+  meta_description VARCHAR(512) DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS content_history (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  content_type VARCHAR(50) NOT NULL, -- 'article' | 'page'
+  content_id INT NOT NULL,
+  changes JSON DEFAULT NULL,
+  editor_id INT DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
