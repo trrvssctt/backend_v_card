@@ -70,7 +70,7 @@ async function register(req, res) {
   const refreshToken = crypto.randomBytes(40).toString('hex');
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000);
   await refreshTokenModel.createRefreshToken({ utilisateur_id: user.id, token: refreshToken, user_agent: req.headers['user-agent'] || null, ip: req.ip, expires_at: expiresAt });
-  res.cookie('refresh_token', refreshToken, { httpOnly: true, secure: (process.env.NODE_ENV === 'production'), sameSite: 'lax', maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000, path: '/' });
+  res.cookie('refresh_token', refreshToken, { httpOnly: true, secure: (process.env.NODE_ENV === 'production'), sameSite: (process.env.COOKIE_SAMESITE || (process.env.NODE_ENV === 'production' ? 'none' : 'lax')), maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000, path: '/' });
   return res.status(201).json({ id: user.id, email: user.email, accessToken, message: 'Compte créé.' });
 }
 
@@ -95,7 +95,7 @@ async function login(req, res) {
   const refreshToken = crypto.randomBytes(40).toString('hex');
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000);
   await refreshTokenModel.createRefreshToken({ utilisateur_id: user.id, token: refreshToken, user_agent: req.headers['user-agent'] || null, ip: req.ip, expires_at: expiresAt });
-  res.cookie('refresh_token', refreshToken, { httpOnly: true, secure: (process.env.NODE_ENV === 'production'), sameSite: 'lax', maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000, path: '/' });
+  res.cookie('refresh_token', refreshToken, { httpOnly: true, secure: (process.env.NODE_ENV === 'production'), sameSite: (process.env.COOKIE_SAMESITE || (process.env.NODE_ENV === 'production' ? 'none' : 'lax')), maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000, path: '/' });
   return res.json({ accessToken });
 }
 
@@ -129,7 +129,7 @@ async function refresh(req, res) {
     const newRefresh = crypto.randomBytes(40).toString('hex');
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000);
     await refreshTokenModel.createRefreshToken({ utilisateur_id: user.id, token: newRefresh, user_agent: req.headers['user-agent'] || null, ip: req.ip, expires_at: expiresAt });
-    res.cookie('refresh_token', newRefresh, { httpOnly: true, secure: (process.env.NODE_ENV === 'production'), sameSite: 'lax', maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000, path: '/' });
+    res.cookie('refresh_token', newRefresh, { httpOnly: true, secure: (process.env.NODE_ENV === 'production'), sameSite: (process.env.COOKIE_SAMESITE || (process.env.NODE_ENV === 'production' ? 'none' : 'lax')), maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000, path: '/' });
     return res.json({ accessToken });
   } catch (e) {
     console.warn('refresh error', e && e.message);
