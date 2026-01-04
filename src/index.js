@@ -39,7 +39,8 @@ const cookieParser = require('cookie-parser');
 // Configure CORS early so preflight requests are handled before body parsing
 // Allow multiple origins via CORS_ORIGIN env var (comma-separated). Default includes localhost and the deployed frontend domain.
 // Include frontend dev origin (localhost:8080), backend local (localhost:3000) and production frontend domain `https://portefolia.tech`.
-const rawOrigins = process.env.CORS_ORIGIN || 'http://localhost:5173,http://localhost:8080,http://localhost:3000,https://frontend-nfc.vercel.app,https://portefolia.tech';
+//const rawOrigins = process.env.CORS_ORIGIN || 'http://localhost:5173,http://localhost:8080,http://localhost:3000,https://portefolia.tech';
+const rawOrigins = process.env.CORS_ORIGIN || 'https://portefolia.tech';
 const allowedOrigins = rawOrigins.split(',').map(s => s.trim()).filter(Boolean);
 const corsOptions = {
   origin: function (origin, callback) {
