@@ -1,5 +1,6 @@
 const planModel = require('../models/planModel');
 const userModel = require('../models/userModel');
+const abonnementModel = require('../models/abonnementModel');
 
 async function listPlans(req, res) {
   try {
@@ -60,8 +61,15 @@ async function subscribe(req, res) {
       const plan = await planModel.getPlanById(plan_id);
       if (!plan) return res.status(404).json({ error: 'Plan introuvable' });
     }
-    const sub = await planModel.subscribeUser({ utilisateur_id, plan_id, start_date, end_date, payment_reference, metadata });
-    res.json({ ok: true, subscriptionId: sub.id });
+        // Create the user_plan (legacy) and an abonnement record for auditing/administration
+        const sub = await planModel.subscribeUser({ utilisateur_id, plan_id, start_date, end_date, payment_reference, metadata });
+        try {
+          const montant = metadata && metadata.price_cents ? Number(metadata.price_cents) / 100 : null;
+          await abonnementModel.createAbonnement({ utilisateur_id, plan_id, montant: montant || 0, currency: metadata && metadata.currency ? metadata.currency : 'XOF', statut: status, metadata });
+        } catch (e) {
+          console.warn('subscribe: could not create abonnement record', e && e.message ? e.message : e);
+        }
+        res.json({ ok: true, subscriptionId: sub.id });
   } catch (err) {
     console.error('planController.subscribe', err);
     res.status(500).json({ error: 'Failed to subscribe user' });

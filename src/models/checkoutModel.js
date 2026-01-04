@@ -8,7 +8,8 @@ async function init() {
       token VARCHAR(128) NOT NULL UNIQUE,
       utilisateur_id INT NOT NULL,
       plan_id INT NOT NULL,
-      commande_id INT NOT NULL,
+      commande_id INT DEFAULT NULL,
+      abonnement_id INT DEFAULT NULL,
       paiement_id INT NOT NULL,
       status VARCHAR(50) DEFAULT 'pending',
       expires_at TIMESTAMP NULL,
@@ -16,6 +17,7 @@ async function init() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NULL DEFAULT NULL,
       FOREIGN KEY (commande_id) REFERENCES commandes(id) ON DELETE CASCADE,
+      FOREIGN KEY (abonnement_id) REFERENCES abonnements(id) ON DELETE SET NULL,
       FOREIGN KEY (paiement_id) REFERENCES paiements(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
   `);
@@ -25,11 +27,11 @@ function genToken() {
   return crypto.randomBytes(24).toString('hex');
 }
 
-async function createCheckout({ utilisateur_id, plan_id, commande_id, paiement_id, expires_at = null, metadata = null }) {
+async function createCheckout({ utilisateur_id, plan_id, commande_id = null, abonnement_id = null, paiement_id, expires_at = null, metadata = null }) {
   const token = genToken();
-  const [result] = await pool.query(`INSERT INTO checkouts (token, utilisateur_id, plan_id, commande_id, paiement_id, expires_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [token, utilisateur_id, plan_id, commande_id, paiement_id, expires_at, metadata ? JSON.stringify(metadata) : null]);
-  return { id: result.insertId, token, utilisateur_id, plan_id, commande_id, paiement_id, expires_at };
+  const [result] = await pool.query(`INSERT INTO checkouts (token, utilisateur_id, plan_id, commande_id, abonnement_id, paiement_id, expires_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [token, utilisateur_id, plan_id, commande_id, abonnement_id, paiement_id, expires_at, metadata ? JSON.stringify(metadata) : null]);
+  return { id: result.insertId, token, utilisateur_id, plan_id, commande_id, abonnement_id, paiement_id, expires_at };
 }
 
 async function findByToken(token) {

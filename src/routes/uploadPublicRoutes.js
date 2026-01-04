@@ -12,4 +12,10 @@ router.post('/cloudinary', auth, requireActive, upload.single('file'), async (re
   return uploadController.uploadToCloudinary(req, res);
 });
 
+// Alias for avatar uploads from the frontend profile page
+// POST /api/uploads/avatar
+router.post('/avatar', auth, requireActive, upload.single('file'), async (req, res) => {
+  return uploadController.uploadToCloudinary(req, res);
+});
+
 module.exports = router;

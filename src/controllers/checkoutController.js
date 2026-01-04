@@ -17,16 +17,16 @@ async function createCheckout(req, res) {
     const plan = await planModel.getPlanById(plan_id);
     if (!plan) return res.status(404).json({ error: 'Plan not found' });
 
-    const numero = genOrderNumber();
     const montant = Number(plan.price_cents || 0) / 100; // montant en unités monétaires
-    // create a commande to track this purchase
-    const commande = await commandeModel.createCommande({ utilisateur_id: userId, numero_commande: numero, montant_total: montant });
 
-    // create a paiement row with pending status
-    const paiement = await paiementModel.createPaiement({ commande_id: commande.id, montant: montant, statut: 'pending', metadata: { plan_id, purpose: 'upgrade' } });
+    // For plan upgrades we create an abonnement and link the paiement to it
+    const abonnement = await require('../models/abonnementModel').createAbonnement({ utilisateur_id: userId, plan_id, montant: montant, currency: plan.currency || 'XOF', statut: 'pending', metadata: { plan } });
 
-    // create checkout token
-    const checkout = await checkoutModel.createCheckout({ utilisateur_id: userId, plan_id, commande_id: commande.id, paiement_id: paiement.id, metadata: { plan } });
+    // create a paiement row linked to the abonnement (no commande)
+    const paiement = await paiementModel.createPaiement({ abonnement_id: abonnement.id, montant: montant, statut: 'pending', metadata: { plan_id, purpose: 'upgrade' } });
+
+    // create checkout token referencing the abonnement
+    const checkout = await checkoutModel.createCheckout({ utilisateur_id: userId, plan_id, abonnement_id: abonnement.id, paiement_id: paiement.id, metadata: { plan } });
 
     return res.status(201).json({ checkout: { id: checkout.id, token: checkout.token }, checkout_url: `${process.env.FRONTEND_BASE || 'http://localhost:8080'}/checkout?token=${checkout.token}` });
   } catch (err) {

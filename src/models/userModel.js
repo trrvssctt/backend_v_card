@@ -38,13 +38,59 @@ async function init() {
       console.warn('userModel.init: could not add is_active column:', err.message);
     }
   }
+  if (!columnNames.has('phone')) {
+    try {
+      await pool.query("ALTER TABLE utilisateurs ADD COLUMN phone VARCHAR(50) NULL");
+    } catch (err) {
+      console.warn('userModel.init: could not add phone column:', err.message);
+    }
+  }
+  // Add admin tracking columns for audit (created_by, modified_by, deleted_by), soft-delete flag and deleted_at timestamp
+  if (!columnNames.has('created_by')) {
+    try {
+      await pool.query("ALTER TABLE utilisateurs ADD COLUMN created_by INT NULL");
+    } catch (err) {
+      console.warn('userModel.init: could not add created_by column:', err.message);
+    }
+  }
+  if (!columnNames.has('modified_by')) {
+    try {
+      await pool.query("ALTER TABLE utilisateurs ADD COLUMN modified_by INT NULL");
+    } catch (err) {
+      console.warn('userModel.init: could not add modified_by column:', err.message);
+    }
+  }
+  if (!columnNames.has('deleted_by')) {
+    try {
+      await pool.query("ALTER TABLE utilisateurs ADD COLUMN deleted_by INT NULL");
+    } catch (err) {
+      console.warn('userModel.init: could not add deleted_by column:', err.message);
+    }
+  }
+  if (!columnNames.has('deleted_at')) {
+    try {
+      await pool.query("ALTER TABLE utilisateurs ADD COLUMN deleted_at TIMESTAMP NULL");
+    } catch (err) {
+      console.warn('userModel.init: could not add deleted_at column:', err.message);
+    }
+  }
+  if (!columnNames.has('statut')) {
+    try {
+      await pool.query("ALTER TABLE utilisateurs ADD COLUMN statut VARCHAR(20) DEFAULT 'actif'");
+    } catch (err) {
+      console.warn('userModel.init: could not add statut column:', err.message);
+    }
+  }
 }
 
-async function createUser({ nom, prenom, email, mot_de_passe, photo_profil = null, biographie = null, role = 'USER' }) {
-  // Create user as verified by default (remove email verification concept)
+async function createUser({ nom, prenom, email, mot_de_passe, phone = null, photo_profil = null, biographie = null, role = 'USER', is_active = true, verified = null }) {
+  // Create user. `is_active` controls whether account is active; when `verified` is not provided,
+  // we set it to the same value as `is_active` to follow admin intent.
+  const verifiedValue = typeof verified === 'boolean' || typeof verified === 'number' ? (verified ? 1 : 0) : (is_active ? 1 : 0);
+  const isActiveValue = is_active ? 1 : 0;
   const [result] = await pool.query(
-    'INSERT INTO utilisateurs (nom, prenom, email, mot_de_passe, photo_profil, biographie, role, verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [nom, prenom, email, mot_de_passe, photo_profil, biographie, role, 1]
+    'INSERT INTO utilisateurs (nom, prenom, email, mot_de_passe, phone, photo_profil, biographie, role, is_active, verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [nom, prenom, email, mot_de_passe, phone, photo_profil, biographie, role, isActiveValue, verifiedValue]
   );
   return { id: result.insertId, nom, prenom, email };
 }
@@ -54,9 +100,38 @@ async function findByEmail(email) {
   return rows[0];
 }
 
-async function findById(id) {
-  const [rows] = await pool.query('SELECT id, nom, prenom, email, photo_profil, biographie, role, verified, is_active, date_inscription, dernier_login FROM utilisateurs WHERE id = ? LIMIT 1', [id]);
+async function findByPhone(phone) {
+  if (!phone) return null;
+  const [rows] = await pool.query('SELECT * FROM utilisateurs WHERE phone = ? LIMIT 1', [phone]);
   return rows[0];
+}
+
+async function findByEmailOrPhone(email, phone) {
+  const [rows] = await pool.query('SELECT * FROM utilisateurs WHERE (email = ? OR (phone IS NOT NULL AND phone = ?)) LIMIT 1', [email, phone]);
+  return rows[0];
+}
+
+async function findById(id) {
+  const [rows] = await pool.query('SELECT id, nom, prenom, email, phone, photo_profil, biographie, role, verified, is_active, date_inscription, dernier_login, created_by, modified_by, deleted_by, deleted_at, statut FROM utilisateurs WHERE id = ? LIMIT 1', [id]);
+  return rows[0];
+}
+
+async function updateUser(id, fields = {}) {
+  // Only allow a safe subset of columns to be updated
+  const allowed = new Set(['prenom', 'nom', 'email', 'mot_de_passe', 'photo_profil', 'biographie', 'is_active', 'verified', 'dernier_login', 'modified_by', 'phone']);
+  const updates = [];
+  const params = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (allowed.has(k)) {
+      updates.push(`${k} = ?`);
+      params.push(v);
+    }
+  }
+  if (updates.length === 0) return null;
+  params.push(id);
+  const sql = `UPDATE utilisateurs SET ${updates.join(', ')} WHERE id = ?`;
+  await pool.query(sql, params);
+  return await findById(id);
 }
 
 async function findByVerificationToken(token) {
@@ -77,10 +152,32 @@ async function setActive(id, active = true) {
 }
 
 async function deleteUser(id) {
+  // Preserve old behavior: hard delete if explicitly called without admin context
   await pool.query('DELETE FROM utilisateurs WHERE id = ?', [id]);
 }
 
+async function softDeleteUser(id, adminId = null) {
+  const params = ['supprimer', 0, adminId, id];
+  await pool.query('UPDATE utilisateurs SET statut = ?, is_active = ?, deleted_by = ?, deleted_at = CURRENT_TIMESTAMP WHERE id = ?', params);
+  return await findById(id);
+}
+
+async function activateUser(id, adminId = null) {
+  const params = [1, 'actif', adminId, id];
+  await pool.query('UPDATE utilisateurs SET is_active = ?, statut = ?, modified_by = ? WHERE id = ?', params);
+  return await findById(id);
+}
+
+async function deactivateUser(id, adminId = null) {
+  const params = [0, 'inactif', adminId, id];
+  await pool.query('UPDATE utilisateurs SET is_active = ?, statut = ?, modified_by = ? WHERE id = ?', params);
+  return await findById(id);
+}
+
+
 async function listUsers({ page = 1, limit = 50 } = {}) {
+  console.log("je suis dans le mauvais model")
+
   const l = Math.min(Number(limit) || 50, 200);
   const p = Math.max(Number(page) || 1, 1);
   const offset = (p - 1) * l;
@@ -95,4 +192,58 @@ async function listUsers({ page = 1, limit = 50 } = {}) {
   return { users: rows, page: p, limit: l };
 }
 
-module.exports = { init, createUser, findByEmail, findById, findByVerificationToken, verifyUser, setLastLogin, setActive, deleteUser, listUsers };
+async function listUsersClients({ page = 1, limit = 50 } = {}) {
+  console.log("je suis dans le bon model")
+  const l = Math.max(1, Math.min(Number(limit) || 50, 200));
+  const p = Math.max(1, Number(page) || 1);
+  const [db] = await pool.query('SELECT DATABASE() as db');
+  console.log('DB ACTIVE:', db[0].db);
+  const offset = (p - 1) * l;
+  const [rows] = await pool.query(
+    `SELECT u.id, u.nom, u.prenom, u.email, u.role, u.verified, u.is_active, u.date_inscription,
+            (SELECT COUNT(*) FROM portfolios p WHERE p.utilisateur_id = u.id) AS portfolio_count
+     FROM utilisateurs u
+     WHERE LOWER(TRIM(u.role)) = 'user'
+     ORDER BY u.date_inscription DESC
+     LIMIT ? OFFSET ?`,
+    [l, offset]
+  );
+  return { users: rows, page: p, limit: l };
+}
+
+async function listPendingUsers({ page = 1, limit = 200 } = {}) {
+  const l = Math.min(Number(limit) || 200, 1000);
+  const p = Math.max(Number(page) || 1, 1);
+  const offset = (p - 1) * l;
+  const [rows] = await pool.query(
+    `SELECT u.id, u.nom, u.prenom, u.email, u.role, u.verified, u.is_active, u.date_inscription,
+            (SELECT COUNT(*) FROM portfolios p WHERE p.utilisateur_id = u.id) AS portfolio_count
+     FROM utilisateurs u
+     WHERE (u.verified = FALSE OR u.verified = 0)
+     ORDER BY u.date_inscription DESC
+     LIMIT ? OFFSET ?`,
+    [l, offset]
+  );
+  return { users: rows, page: p, limit: l };
+}
+
+module.exports = {
+  init,
+  createUser,
+  findByEmail,
+  findById,
+  findByVerificationToken,
+  verifyUser,
+  setLastLogin,
+  setActive,
+  deleteUser,
+  listUsers,
+  listPendingUsers,
+  updateUser,
+  softDeleteUser,
+  activateUser,
+  deactivateUser,
+  listUsersClients,
+  findByPhone,
+  findByEmailOrPhone,
+};

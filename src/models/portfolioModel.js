@@ -19,6 +19,7 @@ async function init() {
       banner_image_url TEXT,
       banner_color VARCHAR(50),
       profile_image_url TEXT,
+      domain VARCHAR(150),
   -- social/contact fields
   location VARCHAR(150),
   phone VARCHAR(50),
@@ -39,6 +40,7 @@ async function init() {
     await pool.query("ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS banner_color VARCHAR(50)");
     await pool.query("ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS profile_image_url TEXT");
     await pool.query("ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS cv_url TEXT");
+    await pool.query("ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS domain VARCHAR(150)");
     // social/contact fields
     await pool.query("ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS location VARCHAR(150)");
     await pool.query("ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS phone VARCHAR(50)");
@@ -69,6 +71,7 @@ async function createPortfolio(data) {
     banner_image_url: data.banner_image_url !== undefined ? data.banner_image_url : (data.banner || data.banner_image || null),
     banner_color: data.banner_color !== undefined ? data.banner_color : (data.bannerColor || null),
     profile_image_url: data.profile_image_url !== undefined ? data.profile_image_url : (data.profile_image || null),
+    domain: data.domain !== undefined ? data.domain : (data.domaine || null),
     cv_url: data.cv_url !== undefined ? data.cv_url : (data.resume_url || null),
     location: data.location || null,
     phone: data.phone || null,
@@ -91,6 +94,7 @@ async function updatePortfolio(id, data) {
   if (data.title !== undefined || data.titre !== undefined) payload.titre = data.title || data.titre;
   if (data.bio !== undefined || data.description !== undefined) payload.description = data.bio || data.description;
   if (data.slug !== undefined || data.url_slug !== undefined) payload.url_slug = data.slug || data.url_slug;
+  if (data.domain !== undefined || data.domaine !== undefined) payload.domain = data.domain || data.domaine;
   if (data.is_public !== undefined || data.est_public !== undefined) payload.est_public = (data.is_public !== undefined) ? data.is_public : data.est_public;
   if (data.theme_color !== undefined || data.theme !== undefined) payload.theme = data.theme_color || data.theme;
   // social/contact fields

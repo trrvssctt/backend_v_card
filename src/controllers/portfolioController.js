@@ -6,14 +6,37 @@ const experienceModel = require('../models/experienceModel');
 const { pool } = require('../db');
 const planModel = require('../models/planModel');
 
+// Map various domain strings to DB enum values expected by the `domaines` column
+function mapDomaines(value) {
+  if (!value && value !== 0) return null;
+  try {
+    const s = String(value).normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+    if (s.includes('tech')) return 'TECH';
+    if (s.includes('agro') || s.includes('agric')) return 'AGRO';
+    if (s.includes('droit') || s.includes('jurid')) return 'DROIT';
+    if (s.includes('medec') || s.includes('medecine') || s.includes('med')) return 'MEDECINE';
+    return null;
+  } catch (e) {
+    const s = String(value).toLowerCase();
+    if (s.includes('tech')) return 'TECH';
+    if (s.includes('agro')) return 'AGRO';
+    if (s.includes('droit')) return 'DROIT';
+    if (s.includes('med')) return 'MEDECINE';
+    return null;
+  }
+}
+
 async function create(req, res) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
     const userId = req.userId;
+    console.log(`[portfolioController.create] called by userId=${userId}`);
+    console.log('[portfolioController.create] body=', Object.keys(req.body || {}).length ? req.body : '<empty>');
     if (!userId) {
       await conn.rollback();
       conn.release();
+      console.warn('[portfolioController.create] unauthorized: no userId');
       return res.status(401).json({ error: 'Unauthorized' });
     }
     const userPlans = await planModel.listUserPlans(userId);
@@ -33,6 +56,7 @@ async function create(req, res) {
       if (existing && existing.length > 0) {
         await conn.rollback();
         conn.release();
+        console.warn(`[portfolioController.create] free plan limit reached for user ${userId} (existing=${existing.length})`);
         return res.status(400).json({ error: "Plan gratuit: vous ne pouvez créer qu'un seul portfolio" });
       }
     }
@@ -44,6 +68,7 @@ async function create(req, res) {
       if (count >= 5) {
         await conn.rollback();
         conn.release();
+        console.warn(`[portfolioController.create] starter plan limit reached for user ${userId} (count=${count})`);
         return res.status(400).json({ error: 'Plan Starter: limite atteinte (5 portfolios maximum)' });
       }
     }
@@ -55,11 +80,23 @@ async function create(req, res) {
       if (count >= 20) {
         await conn.rollback();
         conn.release();
+        console.warn(`[portfolioController.create] pro plan limit reached for user ${userId} (count=${count})`);
         return res.status(400).json({ error: 'Plan Professionnel: limite atteinte (20 portfolios maximum)' });
       }
     }
 
     const incoming = { ...req.body };
+    // normalize domain enum if provided by client
+    const domainesEnum = mapDomaines(incoming.domaines || incoming.domain || incoming.domaine || incoming.domain_enum || incoming.domaines);
+    // Debug: log incoming snapshot and computed enum
+    console.log('[portfolioController.create] incoming keys=', Object.keys(incoming || {}).join(', '));
+    console.log('[portfolioController.create] domainesEnum=', domainesEnum);
+    if ((incoming.domaines || incoming.domain || incoming.domaine || incoming.domain_enum) && !domainesEnum) {
+      await conn.rollback();
+      conn.release();
+      console.warn(`[portfolioController.create] invalid domaines value provided by user ${userId}:`, incoming.domaines || incoming.domain || incoming.domaine || incoming.domain_enum);
+      return res.status(400).json({ error: 'Invalid domaine value. Allowed: TECH, AGRO, DROIT, MEDECINE' });
+    }
     // Enforce social links limit: free=1, starter=3, others unlimited
     const socialKeys = ['website', 'linkedin_url', 'github_url', 'twitter_url', 'facebook_url', 'instagram_url'];
     const providedSocials = socialKeys.reduce((acc, k) => acc + (incoming[k] ? 1 : 0), 0);
@@ -68,9 +105,12 @@ async function create(req, res) {
     if (isFreePlan) socialLimit = 1;
     else if (isStarterPlan) socialLimit = 3;
     else if (isPremiumPlan || isBusinessPlan) socialLimit = 5;
+    // Debug: social counts
+    console.log(`[portfolioController.create] social counts user=${userId} provided=${providedSocials} limit=${socialLimit}`);
     if (providedSocials > socialLimit) {
       await conn.rollback();
       conn.release();
+      console.warn(`[portfolioController.create] social links limit exceeded user=${userId} provided=${providedSocials} limit=${socialLimit}`);
       return res.status(400).json({ error: `Limite formulé ${isFreePlan ? 'gratuite' : 'Starter'} : vous ne pouvez ajouter que ${socialLimit} lien(s) de réseaux sociaux.` });
     }
     // Map frontend fields to French DB columns (SEULEMENT les champs du schéma)
@@ -86,6 +126,8 @@ async function create(req, res) {
       banner_image_url: incoming.banner_image_url || incoming.banner || incoming.bannerImageUrl || null,
       banner_color: incoming.banner_color || incoming.bannerColor || null,
       profile_image_url: incoming.profile_image_url || incoming.profile_image || incoming.profileImageUrl || null,
+      domain: incoming.domain || incoming.domaine || null,
+      domaines: domainesEnum,
       cv_url: incoming.cv_url || incoming.resume_url || incoming.cv || null,
       // contact fields
       location: incoming.location || null,
@@ -103,6 +145,32 @@ async function create(req, res) {
     const values = Object.keys(mapped).filter(k => mapped[k] !== undefined && mapped[k] !== null).map(k => mapped[k]);
     const [pResult] = await conn.query(`INSERT INTO portfolios (${keys}) VALUES (${placeholders})`, values);
     const portfolioId = pResult.insertId;
+
+    // generate a URL slug server-side if not provided by client
+    function slugify(text) {
+      if (!text) return `p-${portfolioId}`;
+      return text
+        .toString()
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/\p{Diacritic}/gu, '')
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60);
+    }
+
+    try {
+      const providedSlug = incoming.slug || incoming.url_slug || null;
+      const base = providedSlug ? providedSlug.toString().trim() : (mapped.titre || `portfolio-${portfolioId}`);
+      const finalSlug = `${slugify(base)}-${portfolioId}`;
+      await conn.query('UPDATE portfolios SET url_slug = ? WHERE id = ?', [finalSlug, portfolioId]);
+      console.log(`Generated slug for portfolio ${portfolioId}: ${finalSlug}`);
+    } catch (e) {
+      console.warn('Could not generate slug for portfolio', e && (e.message || e));
+    }
 
     // Persist related records if provided using the same connection (map to French columns)
     // For free plans we disallow adding related items on creation
@@ -245,6 +313,16 @@ async function update(req, res) {
   if (incoming.linkedin_url !== undefined) mappedUpdate.linkedin_url = incoming.linkedin_url;
   if (incoming.github_url !== undefined) mappedUpdate.github_url = incoming.github_url;
   if (incoming.twitter_url !== undefined) mappedUpdate.twitter_url = incoming.twitter_url;
+  if (incoming.domain !== undefined || incoming.domaine !== undefined) mappedUpdate.domain = incoming.domain || incoming.domaine;
+  // handle enum column `domaines` if provided
+  if (incoming.domaines !== undefined || incoming.domain !== undefined || incoming.domaine !== undefined || incoming.domain_enum !== undefined) {
+    const val = incoming.domaines || incoming.domain || incoming.domaine || incoming.domain_enum;
+    const mappedDomain = mapDomaines(val);
+    if ((incoming.domaines || incoming.domain || incoming.domaine || incoming.domain_enum) && !mappedDomain) {
+      return res.status(400).json({ error: 'Invalid domaine value. Allowed: TECH, AGRO, DROIT, MEDECINE' });
+    }
+    if (mappedDomain) mappedUpdate.domaines = mappedDomain;
+  }
 
       if (Object.keys(mappedUpdate).length > 0) {
         const sets = Object.keys(mappedUpdate).map(k => `${k} = ?`).join(', ');
@@ -405,6 +483,102 @@ async function listByUser(req, res) {
   }
 }
 
+// Admin listing: return portfolios with owner info and aggregated views_count
+async function listAdmin(req, res) {
+  try {
+    const limit = Number(req.query.limit) || 100;
+    const offset = Number(req.query.offset) || 0;
+    const sort = (req.query.sort || '').toString();
+    let orderClause = 'p.created_at DESC';
+    if (sort === 'user') orderClause = 'u.prenom ASC, u.nom ASC';
+    else if (sort === 'views') orderClause = 'v.views_count DESC';
+
+    const sql = `
+      SELECT p.*, u.prenom as owner_first_name, u.nom as owner_last_name, u.email as owner_email,
+        COALESCE(v.views_count, 0) AS views_count
+      FROM portfolios p
+      LEFT JOIN utilisateurs u ON p.utilisateur_id = u.id
+      LEFT JOIN (
+        SELECT portfolio_id, COUNT(*) AS views_count
+        FROM visites
+        GROUP BY portfolio_id
+      ) v ON v.portfolio_id = p.id
+      ORDER BY ${orderClause}
+      LIMIT ? OFFSET ?
+    `;
+    const [rows] = await pool.query(sql, [limit, offset]);
+    // For each portfolio owner, fetch their latest plan (using planModel.listUserPlans)
+    const ownerIds = Array.from(new Set(rows.map(r => r.utilisateur_id).filter(Boolean)));
+    const plansByOwner = {};
+    for (const oid of ownerIds) {
+      try {
+        const userPlans = await planModel.listUserPlans(oid);
+        const latest = userPlans && userPlans.length ? userPlans[0] : null;
+        plansByOwner[oid] = latest || null;
+      } catch (e) {
+        plansByOwner[oid] = null;
+      }
+    }
+
+    // attach owner_plan info to each row
+    for (const r of rows) {
+      const ownerId = r.utilisateur_id;
+      const plan = plansByOwner[ownerId] || null;
+      r.owner_plan = plan ? { id: plan.id, slug: plan.slug || null, name: plan.name || null } : null;
+      // normalize owner fields for frontend
+      r.owner = {
+        id: r.utilisateur_id,
+        first_name: r.owner_first_name || r.first_name || null,
+        last_name: r.owner_last_name || r.last_name || null,
+        email: r.owner_email || null,
+      };
+    }
+
+    // compute aggregated stats from visites counts and plan distribution
+    const total = rows.length;
+    const deletedCount = rows.filter(r => r.deleted_at).length || 0;
+    const isPublic = (p) => {
+      return (
+        p?.is_public === true || p?.is_public === 1 || p?.is_public === '1' ||
+        p?.est_public === true || p?.est_public === 1 || p?.est_public === '1'
+      );
+    };
+    const publicCount = rows.filter((p) => isPublic(p) && !p.deleted_at).length || 0;
+    const privateCount = rows.filter((p) => !isPublic(p) && !p.deleted_at).length || 0;
+    const totalViews = rows.reduce((acc, r) => acc + (Number(r.views_count || 0) || 0), 0);
+    const activeCount = total - deletedCount;
+    const avgViews = activeCount > 0 ? Math.round(totalViews / activeCount) : 0;
+
+    const distributionByPlan = rows.reduce((acc, r) => {
+      const slug = (r.owner_plan && r.owner_plan.slug) ? r.owner_plan.slug : 'unknown';
+      acc[slug] = (acc[slug] || 0) + 1;
+      return acc;
+    }, {});
+
+    // If client asked to sort by plan, do it now (server-side SQL doesn't know plan slug)
+    if (sort === 'plan') {
+      rows.sort((a, b) => {
+        const pa = (a.owner_plan && a.owner_plan.slug) ? a.owner_plan.slug : '';
+        const pb = (b.owner_plan && b.owner_plan.slug) ? b.owner_plan.slug : '';
+        return pa.localeCompare(pb);
+      });
+    }
+
+    return res.json({ portfolios: rows, stats: {
+      total,
+      public: publicCount,
+      private: privateCount,
+      deleted: deletedCount,
+      totalViews,
+      avgViews,
+      distribution_by_plan: distributionByPlan,
+    } });
+  } catch (err) {
+    console.error('Error listing admin portfolios:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+}
+
 async function getPublicBySlug(req, res) {
   try {
     const slug = req.params.slug;
@@ -464,5 +638,5 @@ async function getById(req, res) {
   }
 }
 
-module.exports = { create, update, listByUser, getPublicBySlug, recordVisit, recordVisitBySlug, getById };
+module.exports = { create, update, listByUser, listAdmin, getPublicBySlug, recordVisit, recordVisitBySlug, getById };
 

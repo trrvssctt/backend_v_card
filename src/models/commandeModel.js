@@ -5,8 +5,9 @@ async function init() {
     CREATE TABLE IF NOT EXISTS commandes (
       id INT AUTO_INCREMENT PRIMARY KEY,
       utilisateur_id INT NOT NULL,
-      numero_commande VARCHAR(100) UNIQUE NOT NULL,
-      statut ENUM('En_attente','En_traitement','Expédiée','Livrée','Annulée') DEFAULT 'En_attente',
+        numero_commande VARCHAR(100) UNIQUE NOT NULL,
+        type_commande ENUM('commande_carte','abonnement') DEFAULT 'commande_carte',
+        statut ENUM('En_attente','En_traitement','Expédiée','Livrée','Annulée') DEFAULT 'En_attente',
       montant_total DECIMAL(10,2) DEFAULT 0,
       adresse_livraison TEXT,
       date_commande TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -20,6 +21,7 @@ async function createCommande(data) {
   const payload = {
     utilisateur_id: data.utilisateur_id,
     numero_commande: data.numero_commande,
+    type_commande: data.type_commande || 'commande_carte',
     statut: data.statut || 'En_attente',
     montant_total: data.montant_total || 0,
     adresse_livraison: data.adresse_livraison || null,
@@ -42,7 +44,15 @@ async function findByUser(userId) {
 }
 
 async function updateStatus(id, statut) {
-  await pool.query('UPDATE commandes SET statut = ? WHERE id = ?', [statut, id]);
+  // When a commande is marked as delivered, set the delivery date.
+  if (String(statut) === 'Livrée') {
+    await pool.query('UPDATE commandes SET statut = ?, date_livraison = CURRENT_TIMESTAMP WHERE id = ?', [statut, id]);
+  } else if (String(statut) === 'Annulée') {
+    // If cancelled, clear any delivery date to keep data consistent
+    await pool.query('UPDATE commandes SET statut = ?, date_livraison = NULL WHERE id = ?', [statut, id]);
+  } else {
+    await pool.query('UPDATE commandes SET statut = ? WHERE id = ?', [statut, id]);
+  }
   return await findById(id);
 }
 

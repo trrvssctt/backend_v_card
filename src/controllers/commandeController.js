@@ -24,7 +24,7 @@ async function createOrder(req, res) {
 
     const numero = genOrderNumber();
     const montant = quantity * 30000;
-    const order = await commandeModel.createCommande({ utilisateur_id: userId, numero_commande: numero, montant_total: montant, adresse_livraison });
+    const order = await commandeModel.createCommande({ utilisateur_id: userId, numero_commande: numero, montant_total: montant, adresse_livraison, type_commande: 'commande_carte' });
 
     // create cartes linked to order
     const cards = [];
@@ -75,7 +75,9 @@ async function createPublicOrder(req, res) {
     }
     const montant = Number(quantity) * Number(pricePer);
 
-    const order = await commandeModel.createCommande({ utilisateur_id: user.id, numero_commande: numero, montant_total: montant, adresse_livraison });
+    // decide type: if plan_id provided, treat as abonnement, otherwise as commande_carte
+    const typeCommande = plan_id ? 'abonnement' : 'commande_carte';
+    const order = await commandeModel.createCommande({ utilisateur_id: user.id, numero_commande: numero, montant_total: montant, adresse_livraison, type_commande: typeCommande });
 
     // prepare directory for vcf files
     const visitesDir = path.join(__dirname, '..', '..', 'public', 'Visites_Carte');

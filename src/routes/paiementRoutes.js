@@ -10,6 +10,11 @@ router.get('/', auth, adminAuth, async (req, res) => {
   return paiementController.listAdmin(req, res);
 });
 
+// GET /upcoming -> upcoming payments based on abonnements
+router.get('/upcoming', auth, adminAuth, async (req, res) => {
+  return paiementController.upcoming(req, res);
+});
+
 // GET /:id -> get single paiement
 router.get('/:id', auth, adminAuth, async (req, res) => {
   return paiementController.getById(req, res);
