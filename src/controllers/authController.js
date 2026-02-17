@@ -1,199 +1,194 @@
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
-const userModel = require('../models/userModel');
-const adminUserModel = require('../models/adminUserModel');
-const planModel = require('../models/planModel');
-const sendEmail = require('../utils/sendEmail');
-const commandeModel = require('../models/commandeModel');
-const paiementModel = require('../models/paiementModel');
-const checkoutModel = require('../models/checkoutModel');
-const abonnementModel = require('../models/abonnementModel');
-const refreshTokenModel = require('../models/refreshTokenModel');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'secret';
-const ACCESS_TOKEN_EXPIRES = process.env.ACCESS_TOKEN_EXPIRES || '15m';
-const REFRESH_TOKEN_EXPIRES_DAYS = Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS || 30);
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import prisma from '../config/prisma.js';
+import db from '../config/database.js';
+import * as mailService from '../services/mailService.js';
 
-async function register(req, res) {
-  const { nom, prenom, email, password, photo_profil, biographie, plan_id, plan_slug } = req.body;
-  if (!email || !password || !nom || !prenom) return res.status(400).json({ error: 'nom, prenom, email et password requis' });
+const generateToken = (id) => {
+  return jwt.sign({ id }, process.env.JWT_SECRET || 'secret_key_123', {
+    expiresIn: process.env.JWT_EXPIRES_IN || '30d',
+  });
+};
 
-  const existing = await userModel.findByEmail(email);
-  if (existing) return res.status(409).json({ error: 'Utilisateur déjà existant' });
-
-  const hash = await bcrypt.hash(password, 12);
-  const user = await userModel.createUser({ nom, prenom, email, mot_de_passe: hash, photo_profil, biographie });
-
-  // Previously we sent verification emails and required email verification.
-  // That concept has been removed: users are created verified and can log in immediately.
+export const getMe = async (req, res, next) => {
   try {
-    // If a free plan was provided, attempt to subscribe the user to it (best-effort)
-    let plan = null;
-    if (plan_id) plan = await planModel.getPlanById(plan_id);
-    else if (plan_slug) plan = await planModel.getPlanBySlug(plan_slug);
-    else {
-      try {
-        const allPlans = await planModel.listPlans();
-        plan = (allPlans || []).find((p) => Number(p.price_cents || 0) === 0);
-      } catch (e) {}
+    const user = await prisma.utilisateur.findUnique({
+      where: { id: req.user.id }
+    });
+    if (!user) return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+    
+    // On masque le mot de passe
+    const { mot_de_passe, ...userData } = user;
+    res.json({ success: true, data: userData });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updateMe = async (req, res, next) => {
+  try {
+    const { nom, prenom, biographie, phone, photo_profil, currentPassword, newPassword } = req.body;
+    const user = await prisma.utilisateur.findUnique({ where: { id: req.user.id } });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
     }
-    if (plan && Number(plan.price_cents || 0) === 0) {
-      try {
-        await planModel.subscribeUser({ utilisateur_id: user.id, plan_id: plan.id, status: 'active' });
-        // ensure user is active
-        await userModel.setActive(user.id, true);
-      } catch (e) { console.warn('subscribeUser failed at registration:', e.message || e); }
-    } else if (plan && Number(plan.price_cents || 0) > 0) {
-      // Paid plan: create an abonnement record (do NOT create a commande here)
-      try {
-        const montant = Number(plan.price_cents || 0) / 100;
-        const paymentToken = require('crypto').randomBytes(16).toString('hex');
-        const metadata = { purpose: 'signup', payment_token: paymentToken };
-        const ab = await abonnementModel.createAbonnement({ utilisateur_id: user.id, plan_id: plan.id, montant: montant, currency: 'XOF', statut: 'pending', metadata });
-        // mark user inactive until payment validated
-        try { await userModel.setActive(user.id, false); } catch (e) { console.warn('Could not set user inactive:', e.message || e); }
-        return res.status(201).json({ id: user.id, email: user.email, message: 'Compte créé. Abonnement créé en attente de paiement.', abonnement: { id: ab.id }, checkout: { token: paymentToken, checkout_url: `${process.env.FRONTEND_BASE || 'http://localhost:5173'}/checkout?token=${paymentToken}` } });
-      } catch (e) {
-        console.warn('Could not create abonnement at registration:', e.message || e);
-        try { await userModel.setActive(user.id, false); } catch (ee) {}
-        return res.status(201).json({ id: user.id, email: user.email, message: 'Compte créé. Abonnement en attente (erreur création).' });
+
+    const updateData = {
+      nom: nom || user.nom,
+      prenom: prenom || user.prenom,
+      biographie: biographie !== undefined ? biographie : user.biographie,
+      phone: phone !== undefined ? phone : user.phone,
+      photo_profil: photo_profil !== undefined ? photo_profil : user.photo_profil
+    };
+
+    if (newPassword) {
+      if (!currentPassword) {
+        return res.status(400).json({ success: false, message: 'Le mot de passe actuel est requis pour changer de mot de passe.' });
       }
+
+      const isMatch = await bcrypt.compare(currentPassword, user.mot_de_passe);
+      if (!isMatch) {
+        return res.status(400).json({ success: false, message: 'Le mot de passe actuel est incorrect.' });
+      }
+
+      const salt = await bcrypt.genSalt(12);
+      updateData.mot_de_passe = await bcrypt.hash(newPassword, salt);
     }
-  } catch (e) {
-    console.warn('plan processing error at registration:', e.message || e);
+
+    const updatedUser = await prisma.utilisateur.update({
+      where: { id: req.user.id },
+      data: updateData
+    });
+
+    const { mot_de_passe, ...userData } = updatedUser;
+    res.json({ success: true, data: userData });
+  } catch (error) {
+    next(error);
   }
+};
 
-  const token = jwt.sign({ sub: user.id, role: 'USER', email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-  // issue access + refresh tokens
-  const accessToken = jwt.sign({ sub: user.id, role: 'USER', email: user.email }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES });
-  const refreshToken = crypto.randomBytes(40).toString('hex');
-  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000);
-  await refreshTokenModel.createRefreshToken({ utilisateur_id: user.id, token: refreshToken, user_agent: req.headers['user-agent'] || null, ip: req.ip, expires_at: expiresAt });
-  res.cookie('refresh_token', refreshToken, { httpOnly: true, secure: (process.env.NODE_ENV === 'production'), sameSite: (process.env.COOKIE_SAMESITE || (process.env.NODE_ENV === 'production' ? 'none' : 'lax')), maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000, path: '/' });
-  return res.status(201).json({ id: user.id, email: user.email, accessToken, message: 'Compte créé.' });
-}
-
-async function login(req, res) {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'email et password requis' });
-
-  const user = await userModel.findByEmail(email);
-  if (!user) return res.status(401).json({ error: 'Identifiants invalides' });
-
-  const ok = await bcrypt.compare(password, user.mot_de_passe);
-  if (!ok) return res.status(401).json({ error: 'Identifiants invalides' });
-
-  // If account is inactive (e.g., paid signup awaiting admin validation), block login
-  if (typeof user.is_active !== 'undefined' && user.is_active === 0) {
-    return res.status(403).json({ error: 'Compte inactif. Le paiement est en attente de validation administrative.' });
-  }
-
-  await userModel.setLastLogin(user.id);
-
-  const accessToken = jwt.sign({ sub: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES });
-  const refreshToken = crypto.randomBytes(40).toString('hex');
-  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000);
-  await refreshTokenModel.createRefreshToken({ utilisateur_id: user.id, token: refreshToken, user_agent: req.headers['user-agent'] || null, ip: req.ip, expires_at: expiresAt });
-  res.cookie('refresh_token', refreshToken, { httpOnly: true, secure: (process.env.NODE_ENV === 'production'), sameSite: (process.env.COOKIE_SAMESITE || (process.env.NODE_ENV === 'production' ? 'none' : 'lax')), maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000, path: '/' });
-  return res.json({ accessToken });
-}
-
-async function verify(req, res) {
-  const { token } = req.query;
-  if (!token) return res.status(400).json({ error: 'token manquant' });
-
-  const user = await userModel.findByVerificationToken(token);
-  if (!user) return res.status(400).json({ error: 'token invalide' });
-
-  await userModel.verifyUser(user.id);
-  return res.json({ ok: true, message: 'Email vérifié' });
-}
-
-async function refresh(req, res) {
-  const token = req.cookies && req.cookies.refresh_token;
-  if (!token) return res.status(401).json({ error: 'Refresh token missing' });
+export const register = async (req, res, next) => {
+  const connection = await db.getConnection();
   try {
-    const dbToken = await refreshTokenModel.findByToken(token);
-    if (!dbToken || dbToken.revoked) return res.status(401).json({ error: 'Invalid refresh token' });
-    if (dbToken.expires_at && new Date(dbToken.expires_at) < new Date()) {
-      await refreshTokenModel.revokeById(dbToken.id);
-      return res.status(401).json({ error: 'Refresh token expired' });
+    await connection.beginTransaction();
+    const { nom, prenom, email, mot_de_passe, planId, paymentRef, paymentMethod } = req.body;
+
+    const exists = await prisma.utilisateur.findUnique({ where: { email } });
+    if (exists) {
+      await connection.rollback();
+      return res.status(400).json({ success: false, message: 'Email déjà utilisé' });
     }
-    // issue new access token and rotate refresh token
-    const user = await userModel.findById(dbToken.utilisateur_id);
-    if (!user) return res.status(401).json({ error: 'User not found' });
-    const accessToken = jwt.sign({ sub: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES });
-    // rotate refresh
-    await refreshTokenModel.revokeById(dbToken.id);
-    const newRefresh = crypto.randomBytes(40).toString('hex');
-    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000);
-    await refreshTokenModel.createRefreshToken({ utilisateur_id: user.id, token: newRefresh, user_agent: req.headers['user-agent'] || null, ip: req.ip, expires_at: expiresAt });
-    res.cookie('refresh_token', newRefresh, { httpOnly: true, secure: (process.env.NODE_ENV === 'production'), sameSite: (process.env.COOKIE_SAMESITE || (process.env.NODE_ENV === 'production' ? 'none' : 'lax')), maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000, path: '/' });
-    return res.json({ accessToken });
-  } catch (e) {
-    console.warn('refresh error', e && e.message);
-    return res.status(401).json({ error: 'Could not refresh token' });
-  }
-}
 
-async function logout(req, res) {
-  const token = req.cookies && req.cookies.refresh_token;
-  if (token) {
-    try { await refreshTokenModel.revokeByToken(token); } catch (e) { console.warn('logout revoke failed', e && e.message); }
-  }
-  res.clearCookie('refresh_token', { path: '/' });
-  return res.json({ ok: true });
-}
-
-module.exports = { register, login, verify, refresh, logout };
-
-// Dedicated admin login that authenticates against admin_users table
-async function adminLogin(req, res) {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'email et password requis' });
-  try {
-    const adminUserModel = require('../models/adminUserModel');
-    const admin = await adminUserModel.findByEmail(email);
-    if (!admin) return res.status(401).json({ error: 'Identifiants invalides' });
-    // block login if admin account is inactive
-    if (typeof admin.is_active !== 'undefined' && admin.is_active === 0) {
-      return res.status(403).json({ error: 'Compte administrateur inactif. Contactez le super-admin.' });
+    // Récupérer les infos du plan
+    const [plans] = await connection.query('SELECT * FROM plans WHERE id = ?', [planId]);
+    const plan = plans[0];
+    if (!plan) {
+      await connection.rollback();
+      return res.status(400).json({ success: false, message: 'Plan invalide' });
     }
-    const okAdmin = await bcrypt.compare(password, admin.password_hash);
-    if (!okAdmin) return res.status(401).json({ error: 'Identifiants invalides' });
-    let roleName = await adminUserModel.getRoleNameByAdminId(admin.id);
-    roleName = roleName || 'ADMIN';
-    await userModel.setLastLogin && typeof userModel.setLastLogin === 'function' && userModel.setLastLogin(admin.id).catch(()=>{});
-    const accessToken = jwt.sign({ sub: admin.id, role: roleName, email: admin.email, token_type: 'admin' }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES });
-    const refreshToken = crypto.randomBytes(40).toString('hex');
-    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000);
-    await refreshTokenModel.createRefreshToken({ utilisateur_id: admin.id, token: refreshToken, user_agent: req.headers['user-agent'] || null, ip: req.ip, expires_at: expiresAt });
-    res.cookie('refresh_token', refreshToken, { httpOnly: true, secure: (process.env.NODE_ENV === 'production'), sameSite: 'lax', maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000, path: '/' });
-    return res.json({ accessToken });
-  } catch (e) {
-    console.warn('admin login error', e && e.message);
-    return res.status(500).json({ error: 'Erreur serveur' });
+
+    const salt = await bcrypt.genSalt(12);
+    const hashedPassword = await bcrypt.hash(mot_de_passe, salt);
+    const userId = Math.random().toString(36).substr(2, 9);
+
+    // Déterminer le statut initial
+    const isPaidPlan = plan.price_cents > 0;
+    const initialActive = !isPaidPlan; // Actif si gratuit, inactif si payant (attente validation)
+    const initialStatus = isPaidPlan ? 'en_attente' : 'actif';
+
+    // 1. Créer l'utilisateur
+    await connection.query(
+      'INSERT INTO utilisateurs (id, nom, prenom, email, mot_de_passe, role, is_active, statut) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [userId, nom, prenom, email, hashedPassword, 'USER', initialActive, initialStatus]
+    );
+
+    // 2. Créer l'abonnement
+    const subId = Math.random().toString(36).substr(2, 9);
+    await connection.query(
+      'INSERT INTO subscriptions (id, utilisateur_id, plan_id, status, amount, currency) VALUES (?, ?, ?, ?, ?, ?)',
+      [subId, userId, planId, isPaidPlan ? 'trialing' : 'active', plan.price_cents, plan.currency]
+    );
+
+    // 3. Si payant, enregistrer la preuve de paiement
+    if (isPaidPlan) {
+      if (!paymentRef) {
+        await connection.rollback();
+        return res.status(400).json({ success: false, message: 'Référence de paiement requise pour ce plan' });
+      }
+      const payId = Math.random().toString(36).substr(2, 9);
+      await connection.query(
+        'INSERT INTO paiements (id, utilisateur_id, montant, devise, reference, methode, statut) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [payId, userId, plan.price_cents, plan.currency, paymentRef, paymentMethod || 'mobile', 'en_attente']
+      );
+      
+      // Email d'attente
+      await mailService.sendPendingValidationEmail(email, prenom, plan.name);
+    } else {
+      // Email de bienvenue classique
+      await mailService.sendWelcomeEmail(email, prenom);
+    }
+
+    await connection.commit();
+
+    res.status(201).json({
+      success: true,
+      message: isPaidPlan 
+        ? "Inscription enregistrée. Votre compte sera activé après validation de votre paiement."
+        : "Compte créé avec succès ! Bienvenue.",
+      data: {
+        id: userId,
+        email: email,
+        is_active: initialActive,
+        token: initialActive ? generateToken(userId) : null
+      }
+    });
+  } catch (error) {
+    await connection.rollback();
+    next(error);
+  } finally {
+    connection.release();
   }
-}
+};
 
-module.exports.adminLogin = adminLogin;
-
-async function adminMe(req, res) {
+export const login = async (req, res, next) => {
   try {
-    // authMiddleware ensures token valid and req.userId set
-    const userId = req.userId;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-    const adminUserModel = require('../models/adminUserModel');
-    const admin = await adminUserModel.findById(userId);
-    if (!admin) return res.status(404).json({ error: 'Not found' });
-    // include role name
-    const roleName = await adminUserModel.getRoleNameByAdminId(admin.id).catch(() => null);
-    return res.json({ admin: { id: admin.id, email: admin.email, name: admin.full_name || admin.name || null, role: roleName, is_active: admin.is_active } });
-  } catch (e) {
-    console.warn('adminMe error', e && e.message);
-    return res.status(500).json({ error: 'Server error' });
-  }
-}
+    const { email, mot_de_passe } = req.body;
 
-module.exports.adminMe = adminMe;
+    const user = await prisma.utilisateur.findUnique({ where: { email } });
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Identifiants invalides' });
+    }
+
+    const isMatch = await bcrypt.compare(mot_de_passe, user.mot_de_passe);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Identifiants invalides' });
+    }
+
+    if (!user.is_active) {
+      const message = user.statut === 'en_attente' 
+        ? "Votre compte est en attente de validation par l'administrateur." 
+        : "Votre compte est désactivé. Veuillez contacter le support.";
+      return res.status(403).json({ success: false, message });
+    }
+
+    await prisma.utilisateur.update({
+      where: { id: user.id },
+      data: { dernier_login: new Date() }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        id: user.id,
+        nom: user.nom,
+        prenom: user.prenom,
+        role: user.role,
+        token: generateToken(user.id)
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};

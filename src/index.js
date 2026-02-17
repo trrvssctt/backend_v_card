@@ -1,154 +1,252 @@
-const path = require('path');
-require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
-const express = require('express');
-const bodyParser = require('express').json;
-const userRoutes = require('./routes/userRoutes');
-const authRoutes = require('./routes/authRoutes');
-const userModel = require('./models/userModel');
-const portfolioRoutes = require('./routes/portfolioRoutes');
-const portfolioModel = require('./models/portfolioModel');
-const projectRoutes = require('./routes/projectRoutes');
-const competenceRoutes = require('./routes/competenceRoutes');
-const experienceRoutes = require('./routes/experienceRoutes');
-const projectModel = require('./models/projectModel');
-const competenceModel = require('./models/competenceModel');
-const experienceModel = require('./models/experienceModel');
-const planRoutes = require('./routes/planRoutes');
-const rolesRoutes = require('./routes/rolesRoutes');
-const planModel = require('./models/planModel');
-const commandeRoutes = require('./routes/commandeRoutes');
-const commandeModel = require('./models/commandeModel');
-const carteModel = require('./models/carteModel');
-const carteVisiteModel = require('./models/carte_visite_model');
-const carteVisiteRoutes = require('./routes/carte_visite_routes');
-const templateRoutes = require('./routes/templateRoutes');
-const templateModel = require('./models/templateModel');
-const adminRoutes = require('./routes/adminRoutes');
-const abonnementRoutes = require('./routes/abonnementRoutes');
-const analyticsRoutes = require('./routes/analyticsRoutes');
-const uploadPublicRoutes = require('./routes/uploadPublicRoutes');
-const contentPublicRoutes = require('./routes/contentPublicRoutes');
-const adminController = require('./controllers/adminController');
-const db = require('./db');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-const cors = require('cors');
-const cookieParser = require('cookie-parser');
+import 'dotenv/config';
+import bcrypt from 'bcryptjs';
+import app from './app.js';
+import prisma from './config/prisma.js';
+import db from './config/database.js';
 
-// Configure CORS early so preflight requests are handled before body parsing
-// Allow multiple origins via CORS_ORIGIN env var (comma-separated). Default includes localhost and the deployed frontend domain.
-// Include frontend dev origin (localhost:8080), backend local (localhost:3000) and production frontend domain `https://portefolia.tech`.
-//const rawOrigins = process.env.CORS_ORIGIN || 'http://localhost:5173,http://localhost:8080,http://localhost:3000,https://portefolia.tech';
-const rawOrigins = process.env.CORS_ORIGIN || 'https://portefolia.tech';
-const allowedOrigins = rawOrigins.split(',').map(s => s.trim()).filter(Boolean);
-const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl)
-    if (!origin) return callback(null, true);
-    // If env allows wildcard '*', accept any origin
-    if (allowedOrigins.indexOf('*') !== -1) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      return callback(null, true);
-    } else {
-      return callback(new Error('Not allowed by CORS: ' + origin));
-    }
-  },
-  credentials: true,
-  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  // include common headers like Cache-Control and Accept so browsers' preflight succeeds
-  allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Cache-Control','Accept','Origin']
-};
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
-// parse cookies for refresh token handling
-app.use(cookieParser());
-// increase request body size limits to accommodate larger portfolio payloads
-app.use(bodyParser({ limit: '50mb' }));
-app.use(require('express').urlencoded({ extended: true, limit: '50mb' }));
+const PORT = process.env.PORT || 4000;
 
-app.use('/api/users', userRoutes);
-app.use('/api/auth', authRoutes);
-app.use('/api/portfolios', portfolioRoutes);
-// public content routes (articles/pages)
-app.use('/api', contentPublicRoutes);
-// public portfolio view
-const portfolioController = require('./controllers/portfolioController');
-app.get('/p/:slug', portfolioController.getPublicBySlug);
-app.post('/api/visits', portfolioController.recordVisit);
-app.post('/p/:slug/visits', portfolioController.recordVisitBySlug);
-
-app.get('/', (req, res) => res.json({ok: true}));
-
-// Mount order routes
-app.use('/api/commandes', commandeRoutes);
-// NFC card plans (public)
-app.use('/api/nfc-cards', carteVisiteRoutes);
-// Template routes (public + admin)
-app.use('/api/templates', templateRoutes);
-// Serve generated vCard visit files
-app.use('/uploads/visites_carte', express.static(path.join(__dirname, '..', 'public', 'Visites_Carte')));
-const checkoutRoutes = require('./routes/checkoutRoutes');
-app.use('/api/checkout', checkoutRoutes);
-// admin routes
-  app.use('/api/admin', adminRoutes);
-  app.use('/api/abonnements', abonnementRoutes);
-// Analytics endpoints (per-portfolio, owners only)
-app.use('/api/analytics', analyticsRoutes);
-// public upload routes (authenticated users)
-app.use('/api/uploads', uploadPublicRoutes);
-// plans
-app.use('/api/plans', planRoutes);
-// Public roles listing
-app.use('/api/roles', rolesRoutes);
-
-// Webhooks (public endpoint) - keep minimal and verify signatures in production
-app.post('/webhooks/payment', (req, res) => adminController.paymentWebhook(req, res));
-
-// start server after testing db connection
-(async () => {
+const ensureColumn = async (table, column, definition) => {
   try {
-    await db.testConnection();
-    // initialiser la table utilisateurs si besoin
-    await userModel.init();
-    // initialiser portfolios
-    await portfolioModel.init();
-    await projectModel.init();
-    await competenceModel.init();
-    await experienceModel.init();
-    // init plans
-    await planModel.init();
-    await templateModel.init();
-    const invoiceModel = require('./models/invoiceModel');
-    const articleModel = require('./models/articleModel');
-    const pageModel = require('./models/pageModel');
-    const contentHistoryModel = require('./models/contentHistoryModel');
-    await invoiceModel.init();
-    // init content models (no-op, migration manages schema)
-    try { await articleModel.init(); } catch (e) {}
-    try { await pageModel; } catch (e) {}
-    try { await contentHistoryModel; } catch (e) {}
-    await commandeModel.init();
-    const paiementModel = require('./models/paiementModel');
-    await paiementModel.init();
-    const checkoutModel = require('./models/checkoutModel');
-    await checkoutModel.init();
-    await carteModel.init();
-    await carteVisiteModel.init();
-    const abonnementModel = require('./models/abonnementModel');
-    await abonnementModel.init();
-    const refreshTokenModel = require('./models/refreshTokenModel');
-    await refreshTokenModel.init();
-  const visiteModel = require('./models/visiteModel');
-  await visiteModel.init();
-    app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
+    const [cols] = await db.query(`SHOW COLUMNS FROM \`${table}\` LIKE ?`, [column]);
+    if (cols.length === 0) {
+      console.log(`[Database] Ajout de la colonne '${column}' à la table '${table}'...`);
+      await db.query(`ALTER TABLE \`${table}\` ADD COLUMN ${column} ${definition}`);
+    }
   } catch (err) {
-    console.error('Failed to start server:', err);
-    process.exit(1);
+    console.error(`[Database] Erreur lors de la vérification de la colonne ${column} dans ${table}:`, err.message);
   }
-})();
+};
 
-// Mount feature routes
-app.use('/api/projects', projectRoutes);
-app.use('/api/competences', competenceRoutes);
-app.use('/api/experiences', experienceRoutes);
+const ensureTables = async () => {
+  try {
+    console.log('[Database] Vérification des tables système...');
+    
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS utilisateurs (
+          id VARCHAR(191) PRIMARY KEY,
+          nom VARCHAR(191) NOT NULL,
+          prenom VARCHAR(191) NOT NULL,
+          email VARCHAR(191) UNIQUE NOT NULL,
+          mot_de_passe VARCHAR(191) NOT NULL,
+          role VARCHAR(20) DEFAULT 'USER',
+          is_active BOOLEAN DEFAULT true,
+          statut VARCHAR(20) DEFAULT 'actif',
+          photo_profil TEXT,
+          biographie TEXT,
+          phone VARCHAR(20),
+          created_by VARCHAR(191),
+          dernier_login DATETIME,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          deleted_at TIMESTAMP NULL
+      ) ENGINE=InnoDB;
+    `);
+
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS roles (
+          id VARCHAR(191) PRIMARY KEY,
+          name VARCHAR(191) NOT NULL,
+          description TEXT,
+          statut VARCHAR(20) DEFAULT 'actif',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          deleted_at TIMESTAMP NULL
+      ) ENGINE=InnoDB;
+    `);
+
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS permissions (
+          id VARCHAR(191) PRIMARY KEY,
+          name VARCHAR(191) UNIQUE NOT NULL,
+          description TEXT,
+          statut VARCHAR(20) DEFAULT 'actif'
+      ) ENGINE=InnoDB;
+    `);
+
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS role_permissions (
+          role_id VARCHAR(191) NOT NULL,
+          permission_id VARCHAR(191) NOT NULL,
+          PRIMARY KEY (role_id, permission_id),
+          FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+          FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;
+    `);
+
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS utilisateur_roles (
+          utilisateur_id VARCHAR(191) NOT NULL,
+          role_id VARCHAR(191) NOT NULL,
+          PRIMARY KEY (utilisateur_id, role_id),
+          FOREIGN KEY (utilisateur_id) REFERENCES utilisateurs(id) ON DELETE CASCADE,
+          FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;
+    `);
+
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS portfolios (
+          id VARCHAR(191) PRIMARY KEY,
+          utilisateur_id VARCHAR(191) NOT NULL,
+          titre VARCHAR(191) NOT NULL,
+          description TEXT,
+          theme VARCHAR(50) DEFAULT 'modern',
+          url_slug VARCHAR(191) UNIQUE NOT NULL,
+          est_public BOOLEAN DEFAULT true,
+          banner_image_url TEXT,
+          banner_color VARCHAR(20) DEFAULT '#22c55e',
+          profile_image_url TEXT,
+          cv_url TEXT,
+          location VARCHAR(191),
+          phone VARCHAR(20),
+          website VARCHAR(191),
+          linkedin_url TEXT,
+          github_url TEXT,
+          twitter_url TEXT,
+          instagram_url TEXT,
+          facebook_url TEXT,
+          domain VARCHAR(191),
+          competences JSON,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          deleted_at TIMESTAMP NULL,
+          FOREIGN KEY (utilisateur_id) REFERENCES utilisateurs(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;
+    `);
+
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS projets (
+          id VARCHAR(191) PRIMARY KEY,
+          portfolio_id VARCHAR(191) NOT NULL,
+          titre VARCHAR(191) NOT NULL,
+          description TEXT,
+          image TEXT,
+          lien_demo TEXT,
+          lien_code TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (portfolio_id) REFERENCES portfolios(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;
+    `);
+
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS experiences (
+          id VARCHAR(191) PRIMARY KEY,
+          portfolio_id VARCHAR(191) NOT NULL,
+          titre_poste VARCHAR(191) NOT NULL,
+          entreprise VARCHAR(191) NOT NULL,
+          description TEXT,
+          date_debut VARCHAR(50),
+          date_fin VARCHAR(50),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (portfolio_id) REFERENCES portfolios(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;
+    `);
+
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS visites (
+          id VARCHAR(191) PRIMARY KEY,
+          portfolio_id VARCHAR(191) NOT NULL,
+          adresse_ip VARCHAR(45),
+          user_agent TEXT,
+          page VARCHAR(50),
+          date_visite TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (portfolio_id) REFERENCES portfolios(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;
+    `);
+
+    await db.query(`CREATE TABLE IF NOT EXISTS plans (id VARCHAR(191) PRIMARY KEY, name VARCHAR(191) NOT NULL, slug VARCHAR(191) UNIQUE NOT NULL, description TEXT, price_cents INT NOT NULL DEFAULT 0, currency VARCHAR(10) DEFAULT 'F CFA', billing_interval ENUM('month', 'year') DEFAULT 'month', is_public BOOLEAN DEFAULT true, features JSON, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, deleted_at TIMESTAMP NULL) ENGINE=InnoDB;`);
+    await db.query(`CREATE TABLE IF NOT EXISTS subscriptions (id VARCHAR(191) PRIMARY KEY, utilisateur_id VARCHAR(191) NOT NULL, plan_id VARCHAR(191) NOT NULL, status ENUM('active', 'cancelled', 'expired', 'trialing') DEFAULT 'active', start_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, end_date TIMESTAMP NULL, amount INT NOT NULL, currency VARCHAR(10) DEFAULT 'F CFA', FOREIGN KEY (utilisateur_id) REFERENCES utilisateurs(id) ON DELETE CASCADE, FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE CASCADE) ENGINE=InnoDB;`);
+    await db.query(`CREATE TABLE IF NOT EXISTS paiements (id VARCHAR(191) PRIMARY KEY, utilisateur_id VARCHAR(191) NOT NULL, montant INT NOT NULL, devise VARCHAR(10) DEFAULT 'F CFA', reference VARCHAR(191), methode VARCHAR(50), statut ENUM('succes', 'echec', 'en_attente') DEFAULT 'succes', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (utilisateur_id) REFERENCES utilisateurs(id) ON DELETE CASCADE) ENGINE=InnoDB;`);
+    await db.query(`CREATE TABLE IF NOT EXISTS invoices (id VARCHAR(191) PRIMARY KEY, utilisateur_id VARCHAR(191) NOT NULL, amount INT NOT NULL, currency VARCHAR(10) DEFAULT 'F CFA', reference VARCHAR(191) UNIQUE, status ENUM('paid', 'pending', 'failed') DEFAULT 'paid', url_pdf TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (utilisateur_id) REFERENCES utilisateurs(id) ON DELETE CASCADE) ENGINE=InnoDB;`);
+    
+    await ensureColumn('portfolios', 'competences', 'JSON');
+    await ensureColumn('portfolios', 'banner_image_url', 'TEXT');
+    await ensureColumn('portfolios', 'banner_color', "VARCHAR(20) DEFAULT '#22c55e'");
+    await ensureColumn('portfolios', 'profile_image_url', 'TEXT');
+    await ensureColumn('portfolios', 'cv_url', 'TEXT');
+    await ensureColumn('portfolios', 'location', 'VARCHAR(191)');
+    await ensureColumn('portfolios', 'phone', 'VARCHAR(20)');
+    await ensureColumn('portfolios', 'website', 'VARCHAR(191)');
+    await ensureColumn('portfolios', 'linkedin_url', 'TEXT');
+    await ensureColumn('portfolios', 'github_url', 'TEXT');
+    await ensureColumn('portfolios', 'twitter_url', 'TEXT');
+    await ensureColumn('portfolios', 'instagram_url', 'TEXT');
+    await ensureColumn('portfolios', 'facebook_url', 'TEXT');
+    await ensureColumn('portfolios', 'domain', 'VARCHAR(191)');
+    await ensureColumn('experiences', 'date_debut', 'VARCHAR(50)');
+    await ensureColumn('experiences', 'date_fin', 'VARCHAR(50)');
+
+    console.log('[Database] Tables système opérationnelles.');
+  } catch (error) {
+    console.error('[Database] Erreur lors de la vérification des tables:', error);
+  }
+};
+
+const seedPermissions = async () => {
+  const perms = [
+    { id: 'p_ov', name: 'access_overview', description: 'Accès à la vue d\'ensemble' },
+    { id: 'p_us', name: 'access_users', description: 'Gestion des utilisateurs' },
+    { id: 'p_rev', name: 'access_revenue', description: 'Gestion des revenus' },
+    { id: 'p_log', name: 'access_logs', description: 'Consultation des logs' },
+    { id: 'p_rol', name: 'access_roles', description: 'Gestion des rôles et permissions' },
+    { id: 'p_pln', name: 'access_plans', description: 'Gestion des plans d\'abonnement' },
+    { id: 'p_cli', name: 'access_clients', description: 'Gestion des clients' },
+  ];
+
+  for (const p of perms) {
+    try {
+      const exists = await prisma.permission.findUnique({ where: { name: p.name } });
+      if (!exists) {
+        await prisma.permission.create({ data: { ...p, statut: 'actif' } });
+      }
+    } catch (e) {}
+  }
+};
+
+const seedAdmin = async () => {
+  try {
+    const adminExists = await prisma.utilisateur.findFirst({
+      where: { role: 'ADMIN' }
+    });
+
+    if (!adminExists) {
+      console.log('[Seed] Aucun admin trouvé. Création de l\'admin par défaut...');
+      const salt = await bcrypt.genSalt(12);
+      const hashedPassword = await bcrypt.hash('Passer1234', salt);
+      
+      await prisma.utilisateur.create({
+        data: {
+          id: 'admin-001',
+          nom: 'Admin',
+          prenom: 'Portefolia',
+          email: 'admin@portefolia.pro',
+          mot_de_passe: hashedPassword,
+          role: 'ADMIN',
+          is_active: true,
+          statut: 'actif'
+        }
+      });
+      console.log('[Seed] Admin par défaut créé : admin@portefolia.pro / Passer1234');
+    }
+  } catch (error) {
+    console.error('[Seed] Erreur lors de l\'initialisation de l\'admin:', error);
+  }
+};
+
+const server = app.listen(PORT, async () => {
+  console.log(`[Portefolia Server] Up and running on port ${PORT}`);
+  await ensureTables();
+  await seedPermissions();
+  await seedAdmin();
+});
+
+const shutdown = async () => {
+  console.log('[Portefolia Server] Shutting down gracefully...');
+  server.close(async () => {
+    await prisma.$disconnect();
+    process.exit(0);
+  });
+};
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
